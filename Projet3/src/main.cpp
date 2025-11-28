@@ -7,6 +7,9 @@
 const char* WIFI_SSID = "IOT-6220";
 const char* WIFI_PASS = "6220M@cSelection";
 
+//Headers
+void sendHttpRequest(const char* url);
+
 WiFiClient espClient;
 
 // Attempt to connect to WiFi network; if it fails, wait 1 second and try again.
@@ -18,15 +21,16 @@ void connectToWiFi() {
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   // Loop until connected, retrying every 1 second
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print("WiFi not connected, retrying in 1s...\n");
-    delay(1000);
-    // If not connected, call begin again to restart connection attempt
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
+    delay(500);
+    Serial.print(".");
   }
 
-  Serial.print("Connected! IP address: ");
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("WiFi connected, IP: ");
+    Serial.println(WiFi.localIP());
+  }
 }
 
 void setup() {
