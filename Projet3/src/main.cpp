@@ -2,16 +2,28 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <HTTPClient.h>
+#include <PubSubClient.h>
 
 // WiFi credentials
 const char* WIFI_SSID = "IOT-6220";
 const char* WIFI_PASS = "6220M@cSelection";
 
+// Thinger.io / MQTT credentials
+const char* MQTT_HOST = "maisonneuve.aws.thinger.io";
+const uint16_t MQTT_PORT = 1883;
+const char* THINGER_USER = "Cesar";                  // your Thinger account username
+const char* THINGER_DEVICE = "ESP32-C6-DevKit-M1";   // device id (used as MQTT client id)
+const char* THINGER_CREDENTIAL = "HexapodSupremacy"; // device credential / password
+const char* MQTT_TOPIC = "ISS";
+
 //Headers
 void sendHttpRequest(const char* url);
 const char* httpReasonPhrase(int code);
+String parseAndPrintISS(const String& payload);
+bool ensureMqttConnected();
 
 WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
 // Attempt to connect to WiFi network; if it fails, wait 1 second and try again.
 void connectToWiFi() {
@@ -41,19 +53,36 @@ void setup() {
   delay(100);
 
   connectToWiFi();
+  // Configure MQTT server
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  ensureMqttConnected();
 }
 
 void loop() {
-  // Example: send an HTTP GET request every 10 seconds
+  // Example: send an HTTP GET request every 2 seconds
   static unsigned long lastRequest = 0;
-  const unsigned long interval = 10000; // 10s
+  const unsigned long interval = 2000; // 2s
   unsigned long now = millis();
 
-  if (now - lastRequest >= interval) {
-    lastRequest = now;
-    // Replace the URL below with your API endpoint
-    sendHttpRequest("http://api.open-notify.org/iss-now.json");
+  if (!mqttClient.connected()) {
+    // reconnect in background
+    if (ensureMqttConnected()) {
+      Serial.println("Reconnected to MQTT");
+    } else {
+      // failed, wait before retrying
+      delay(2000);
+      return;
+    }
   }
+  
+  else if (mqttClient.connected()){
+    if (now - lastRequest >= interval) {
+      lastRequest = now;
+      
+      sendHttpRequest("http://api.open-notify.org/iss-now.json");
+    }
+  }
+  mqttClient.loop();
 }
 
 // Sends a simple HTTP GET request to the provided URL and prints the response
@@ -71,6 +100,15 @@ void sendHttpRequest(const char* url) {
   Serial.print(" returned ");
   Serial.print(httpCode);
 
+  while(httpCode == -1) {
+    Serial.println(" (timeout, retrying...)");
+    httpCode = http.GET();
+    Serial.print("HTTP GET to ");
+    Serial.print(url);
+    Serial.print(" returned ");
+    Serial.print(httpCode);
+  }
+
   // Print a human readable reason if available
   const char* reason = httpReasonPhrase(httpCode);
   if (reason != NULL) {
@@ -82,8 +120,17 @@ void sendHttpRequest(const char* url) {
 
   if (httpCode >= 200 && httpCode <= 304) {
     String payload = http.getString();
-    Serial.println("Response payload:");
-    Serial.println(payload);
+    // Parse ISS JSON and print nicely formatted output
+    String issJson = parseAndPrintISS(payload);
+
+    // Publish the ISS JSON to MQTT topic if connected
+    if (mqttClient.connected()) {
+      bool ok = mqttClient.publish(MQTT_TOPIC, issJson.c_str());
+      Serial.print("Published to MQTT topic "); Serial.print(MQTT_TOPIC);
+      Serial.print(ok ? " (ok)" : " (failed)"); Serial.println();
+    } else {
+      Serial.println("MQTT not connected, skipping publish");
+    }
   } else {
     Serial.print("HTTP request failed, error: ");
     Serial.println(http.errorToString(httpCode));
@@ -92,9 +139,42 @@ void sendHttpRequest(const char* url) {
   http.end();
 }
 
+// Try to connect to the MQTT broker using Thinger credentials
+bool ensureMqttConnected() {
+  if (mqttClient.connected()) return true;
+
+  Serial.print("Connecting to MQTT broker ");
+  Serial.print(MQTT_HOST);
+  Serial.print(":");
+  Serial.print(MQTT_PORT);
+  Serial.print(" as ");
+  Serial.println(THINGER_DEVICE);
+
+  // PubSubClient::connect(clientId, username, password)
+  if (mqttClient.connect(THINGER_DEVICE, THINGER_USER, THINGER_CREDENTIAL)) {
+    Serial.println("MQTT connected");
+
+    // Subscribe to a device topic — adjust to the topics you use on thinger.io
+    // Example: listen for commands on devices/<device>/c/#
+    String subTopic = String(MQTT_TOPIC);
+    mqttClient.subscribe(subTopic.c_str());
+    Serial.print("Subscribed to: ");
+    Serial.println(subTopic);
+    return true;
+  } else {
+    Serial.print("MQTT connect failed, rc=");
+    Serial.println(mqttClient.state());
+    return false;
+  }
+}
+
 // Return a brief reason phrase for common HTTP status codes
 const char* httpReasonPhrase(int code) {
   switch (code) {
+    case 100: return "Continue";
+    case 101: return "Switching Protocols";
+    case 102: return "Processing";
+    case 103: return "Early Hints";
     case 200: return "OK";
     case 201: return "Created";
     case 202: return "Accepted";
@@ -120,4 +200,103 @@ const char* httpReasonPhrase(int code) {
     case 504: return "Gateway Timeout";
     default: return NULL;
   }
+}
+
+// Parse a simple ISS JSON payload, print the important fields and return a compact JSON string
+String parseAndPrintISS(const String& payload) {
+  String p = payload;
+  // Make a lowercase copy for case-insensitive key search
+  String lower = p;
+  lower.toLowerCase();
+
+  String latitude = "(not found)";
+  String longitude = "(not found)";
+  String message = "(not found)";
+  long timestamp = 0;
+
+  // message: "message":"value"
+  int idx = lower.indexOf("\"message\"");
+  if (idx != -1) {
+    int colon = lower.indexOf(':', idx);
+    int q1 = p.indexOf('"', colon + 1);
+    if (q1 != -1) {
+      int q2 = p.indexOf('"', q1 + 1);
+      if (q2 != -1) message = p.substring(q1 + 1, q2);
+    }
+  }
+
+  // timestamp: "timestamp": 123456789
+  idx = lower.indexOf("\"timestamp\"");
+  if (idx != -1) {
+    int colon = lower.indexOf(':', idx);
+    if (colon != -1) {
+      int endPos = lower.indexOf(',', colon + 1);
+      if (endPos == -1) endPos = lower.indexOf('}', colon + 1);
+      if (endPos != -1) {
+        String ts = p.substring(colon + 1, endPos);
+        ts.trim();
+        timestamp = ts.toInt();
+      }
+    }
+  }
+
+  // latitude and longitude: either top-level or under iss_position
+  // latitude
+  idx = lower.indexOf("\"latitude\"");
+  if (idx != -1) {
+    int colon = lower.indexOf(':', idx);
+    if (colon != -1) {
+      int q1 = p.indexOf('"', colon + 1);
+      if (q1 != -1) {
+        int q2 = p.indexOf('"', q1 + 1);
+        if (q2 != -1) latitude = p.substring(q1 + 1, q2);
+      } else {
+        int endPos = lower.indexOf(',', colon + 1);
+        if (endPos == -1) endPos = lower.indexOf('}', colon + 1);
+        if (endPos != -1) {
+          latitude = p.substring(colon + 1, endPos);
+          latitude.trim();
+        }
+      }
+    }
+  }
+
+  // longitude
+  idx = lower.indexOf("\"longitude\"");
+  if (idx != -1) {
+    int colon = lower.indexOf(':', idx);
+    if (colon != -1) {
+      int q1 = p.indexOf('"', colon + 1);
+      if (q1 != -1) {
+        int q2 = p.indexOf('"', q1 + 1);
+        if (q2 != -1) longitude = p.substring(q1 + 1, q2);
+      } else {
+        int endPos = lower.indexOf(',', colon + 1);
+        if (endPos == -1) endPos = lower.indexOf('}', colon + 1);
+        if (endPos != -1) {
+          longitude = p.substring(colon + 1, endPos);
+          longitude.trim();
+        }
+      }
+    }
+  }
+
+  // Print formatted summary
+  Serial.println("--- ISS Position ---");
+  Serial.print("Message   : "); Serial.println(message);
+  Serial.print("Timestamp : ");
+  if (timestamp != 0) Serial.println(timestamp); else Serial.println("(not found)");
+  Serial.print("Latitude  : "); Serial.println(latitude);
+  Serial.print("Longitude : "); Serial.println(longitude);
+  Serial.println("---------------------");
+
+  // Build a compact JSON to publish via MQTT
+  String out = "{";
+  out += "\"message\":\"" + message + "\",";
+  out += "\"timestamp\":" + String(timestamp) + ",";
+  out += "\"latitude\":\"" + latitude + "\",";
+  out += "\"longitude\":\"" + longitude + "\"";
+  out += "}";
+
+  return out;
 }
