@@ -1,18 +1,42 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
 
-// put function declarations here:
-int myFunction(int, int);
+// WiFi credentials
+const char* WIFI_SSID = "IOT-6220";
+const char* WIFI_PASS = "6220M@cSelection";
+
+WiFiClient espClient;
+
+// Attempt to connect to WiFi network; if it fails, wait 1 second and try again.
+void connectToWiFi() {
+  Serial.print("Connecting to WiFi SSID: ");
+  Serial.println(WIFI_SSID);
+
+  // Begin WiFi connection
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  // Loop until connected, retrying every 1 second
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print("WiFi not connected, retrying in 1s...\n");
+    delay(1000);
+    // If not connected, call begin again to restart connection attempt
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+  }
+
+  Serial.print("Connected! IP address: ");
+  Serial.println(WiFi.localIP());
+}
 
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+  // Start serial for debug output
+  Serial.begin(115200);
+  // Small delay to allow Serial monitor to attach
+  delay(100);
+
+  connectToWiFi();
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
 }
