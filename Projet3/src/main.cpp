@@ -5,15 +5,15 @@
 #include <PubSubClient.h>
 
 // WiFi credentials
-const char* WIFI_SSID = "Papi Cesar";
-const char* WIFI_PASS = "Apple Time";
+const char* WIFI_SSID = "IOT-6220";
+const char* WIFI_PASS = "6220M@cSelection";
 
 // Thinger.io MQTT credentials
 const char* MQTT_SERVER = "maisonneuve.aws.thinger.io";
 const int MQTT_PORT = 1883;
-const char* MQTT_USER = "Cesar"; // Replace with your Thinger.io username
-const char* MQTT_PASS = "Projet3"; // Replace with your Thinger.io MQTT token
-
+const char* THINGER_USER = "Cesar"; // Replace with your Thinger.io username
+const char* THINGER_DEVICE = "ESP32-C6-DevKit-M1";   // device id (used as MQTT client id)
+const char* THINGER_CREDENTIAL = "Projet3"; // device credential / password  
 // Headers
 void sendHttpRequest(const char* url);
 const char* httpReasonPhrase(int code);
@@ -54,7 +54,7 @@ void connectToMQTT() {
 
   unsigned long start = millis();
   while (!mqttClient.connected() && millis() - start < 10000) {
-    if (mqttClient.connect("ESP32Client", MQTT_USER, MQTT_PASS)) {
+    if (mqttClient.connect(THINGER_DEVICE, THINGER_USER, THINGER_CREDENTIAL)) {
       Serial.println("MQTT connected!");
     } else {
       Serial.print("MQTT connection failed, rc=");
