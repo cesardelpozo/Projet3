@@ -14,6 +14,7 @@ const int MQTT_PORT = 1883;
 const char* THINGER_USER = "Cesar"; // Replace with your Thinger.io username
 const char* THINGER_DEVICE = "ESP32-C6-DevKit-M1";   // device id (used as MQTT client id)
 const char* THINGER_CREDENTIAL = "Projet3"; // device credential / password 
+const char* TOPIC = "coordonnees";
 
 // Headers
 void sendHttpRequest(const char* url);
@@ -144,6 +145,18 @@ void sendHttpRequest(const char* url) {
     String payload = http.getString();
     // Parse ISS JSON and print nicely formatted output
     String issJson = parseAndPrintISS(payload);
+    
+    // Publish to MQTT topic with Thinger.io format
+    if (mqttClient.connected()) {
+      if (mqttClient.publish(TOPIC, payload.c_str())) {
+        Serial.print("Published ISS data to MQTT topic: ");
+        Serial.println(TOPIC);
+      } else {
+        Serial.println("Failed to publish to MQTT");
+      }
+    } else {
+      Serial.println("MQTT not connected, skipping publish");
+    }
   } else {
     Serial.print("HTTP request failed, error: ");
     Serial.println(http.errorToString(httpCode));
