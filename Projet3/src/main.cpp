@@ -2,28 +2,17 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <HTTPClient.h>
-#include <PubSubClient.h>
 
 // WiFi credentials
-const char* WIFI_SSID = "IOT-6220";
-const char* WIFI_PASS = "6220M@cSelection";
-
-// Thinger.io / MQTT credentials
-const char* MQTT_HOST = "maisonneuve.aws.thinger.io";
-const uint16_t MQTT_PORT = 1883;
-const char* THINGER_USER = "Cesar";                  // your Thinger account username
-const char* THINGER_DEVICE = "ESP32-C6-DevKit-M1";   // device id (used as MQTT client id)
-const char* THINGER_CREDENTIAL = "HexapodSupremacy"; // device credential / password
-const char* MQTT_TOPIC = "ISS";
+const char* WIFI_SSID = "Papi Cesar";
+const char* WIFI_PASS = "Apple Time";
 
 //Headers
 void sendHttpRequest(const char* url);
 const char* httpReasonPhrase(int code);
 String parseAndPrintISS(const String& payload);
-bool ensureMqttConnected();
 
 WiFiClient espClient;
-PubSubClient mqttClient(espClient);
 
 // Attempt to connect to WiFi network; if it fails, wait 1 second and try again.
 void connectToWiFi() {
@@ -53,9 +42,6 @@ void setup() {
   delay(100);
 
   connectToWiFi();
-  // Configure MQTT server
-  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
-  ensureMqttConnected();
 }
 
 void loop() {
@@ -64,25 +50,11 @@ void loop() {
   const unsigned long interval = 2000; // 2s
   unsigned long now = millis();
 
-  if (!mqttClient.connected()) {
-    // reconnect in background
-    if (ensureMqttConnected()) {
-      Serial.println("Reconnected to MQTT");
-    } else {
-      // failed, wait before retrying
-      delay(2000);
-      return;
-    }
+  if (now - lastRequest >= interval) {
+    lastRequest = now;
+    
+    sendHttpRequest("http://api.open-notify.org/iss-now.json");
   }
-  
-  else if (mqttClient.connected()){
-    if (now - lastRequest >= interval) {
-      lastRequest = now;
-      
-      sendHttpRequest("http://api.open-notify.org/iss-now.json");
-    }
-  }
-  mqttClient.loop();
 }
 
 // Sends a simple HTTP GET request to the provided URL and prints the response
@@ -122,50 +94,12 @@ void sendHttpRequest(const char* url) {
     String payload = http.getString();
     // Parse ISS JSON and print nicely formatted output
     String issJson = parseAndPrintISS(payload);
-
-    // Publish the ISS JSON to MQTT topic if connected
-    if (mqttClient.connected()) {
-      bool ok = mqttClient.publish(MQTT_TOPIC, issJson.c_str());
-      Serial.print("Published to MQTT topic "); Serial.print(MQTT_TOPIC);
-      Serial.print(ok ? " (ok)" : " (failed)"); Serial.println();
-    } else {
-      Serial.println("MQTT not connected, skipping publish");
-    }
   } else {
     Serial.print("HTTP request failed, error: ");
     Serial.println(http.errorToString(httpCode));
   }
 
   http.end();
-}
-
-// Try to connect to the MQTT broker using Thinger credentials
-bool ensureMqttConnected() {
-  if (mqttClient.connected()) return true;
-
-  Serial.print("Connecting to MQTT broker ");
-  Serial.print(MQTT_HOST);
-  Serial.print(":");
-  Serial.print(MQTT_PORT);
-  Serial.print(" as ");
-  Serial.println(THINGER_DEVICE);
-
-  // PubSubClient::connect(clientId, username, password)
-  if (mqttClient.connect(THINGER_DEVICE, THINGER_USER, THINGER_CREDENTIAL)) {
-    Serial.println("MQTT connected");
-
-    // Subscribe to a device topic — adjust to the topics you use on thinger.io
-    // Example: listen for commands on devices/<device>/c/#
-    String subTopic = String(MQTT_TOPIC);
-    mqttClient.subscribe(subTopic.c_str());
-    Serial.print("Subscribed to: ");
-    Serial.println(subTopic);
-    return true;
-  } else {
-    Serial.print("MQTT connect failed, rc=");
-    Serial.println(mqttClient.state());
-    return false;
-  }
 }
 
 // Return a brief reason phrase for common HTTP status codes
