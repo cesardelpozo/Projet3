@@ -13,10 +13,10 @@ const char* MQTT_SERVER = "maisonneuve.aws.thinger.io";
 const int MQTT_PORT = 1883;
 const char* THINGER_USER = "Cesar"; // Replace with your Thinger.io username
 const char* THINGER_DEVICE = "ESP32-C6-DevKit-M1";   // device id (used as MQTT client id)
-const char* THINGER_CREDENTIAL = "Projet3"; // device credential / password  
+const char* THINGER_CREDENTIAL = "Projet3"; // device credential / password 
+
 // Headers
 void sendHttpRequest(const char* url);
-const char* httpReasonPhrase(int code);
 String parseAndPrintISS(const String& payload);
 void connectToMQTT();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
@@ -46,16 +46,20 @@ void connectToWiFi() {
 
 // Connect to MQTT broker (Thinger.io)
 void connectToMQTT() {
-  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
-  mqttClient.setCallback(mqttCallback);
+  // Only reconnect if WiFi is connected
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected, cannot connect to MQTT");
+    return;
+  }
   
   Serial.print("Connecting to MQTT broker: ");
   Serial.println(MQTT_SERVER);
 
   unsigned long start = millis();
-  while (!mqttClient.connected() && millis() - start < 10000) {
+  while (!mqttClient.connected() && millis() - start < 15000) {
     if (mqttClient.connect(THINGER_DEVICE, THINGER_USER, THINGER_CREDENTIAL)) {
       Serial.println("MQTT connected!");
+      break;
     } else {
       Serial.print("MQTT connection failed, rc=");
       Serial.println(mqttClient.state());
@@ -79,6 +83,10 @@ void setup() {
   // Small delay to allow Serial monitor to attach
   delay(100);
 
+  // Configure MQTT client once
+  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+
   connectToWiFi();
   connectToMQTT();
 }
@@ -91,9 +99,9 @@ void loop() {
   
   mqttClient.loop(); // Keep MQTT connection alive
 
-  // Example: send an HTTP GET request every 2 seconds
+  // Example: send an HTTP GET request every 5 second
   static unsigned long lastRequest = 0;
-  const unsigned long interval = 2000; // 2s
+  const unsigned long interval = 5000; // 5s
   unsigned long now = millis();
 
   if (now - lastRequest >= interval) {
@@ -120,6 +128,9 @@ void sendHttpRequest(const char* url) {
 
   while(httpCode == -1) {
     Serial.println(" (timeout, retrying...)");
+    http.end();  // Clean up the previous connection
+    delay(100);  // Wait before retrying
+    http.begin(espClient, url);  // Re-establish connection
     httpCode = http.GET();
     Serial.print("HTTP GET to ");
     Serial.print(url);
@@ -127,13 +138,6 @@ void sendHttpRequest(const char* url) {
     Serial.print(httpCode);
   }
 
-  // Print a human readable reason if available
-  const char* reason = httpReasonPhrase(httpCode);
-  if (reason != NULL) {
-    Serial.print(" (");
-    Serial.print(reason);
-    Serial.print(")");
-  }
   Serial.println();
 
   if (httpCode >= 200 && httpCode <= 304) {
@@ -146,40 +150,6 @@ void sendHttpRequest(const char* url) {
   }
 
   http.end();
-}
-
-// Return a brief reason phrase for common HTTP status codes
-const char* httpReasonPhrase(int code) {
-  switch (code) {
-    case 100: return "Continue";
-    case 101: return "Switching Protocols";
-    case 102: return "Processing";
-    case 103: return "Early Hints";
-    case 200: return "OK";
-    case 201: return "Created";
-    case 202: return "Accepted";
-    case 204: return "No Content";
-    case 301: return "Moved Permanently";
-    case 302: return "Found";
-    case 304: return "Not Modified";
-    case 400: return "Bad Request";
-    case 401: return "Unauthorized";
-    case 402: return "Payment Required";
-    case 403: return "Forbidden";
-    case 404: return "Not Found";
-    case 405: return "Method Not Allowed";
-    case 408: return "Request Timeout";
-    case 409: return "Conflict";
-    case 410: return "Gone";
-    case 413: return "Payload Too Large";
-    case 429: return "Too Many Requests";
-    case 500: return "Internal Server Error";
-    case 501: return "Not Implemented";
-    case 502: return "Bad Gateway";
-    case 503: return "Service Unavailable";
-    case 504: return "Gateway Timeout";
-    default: return NULL;
-  }
 }
 
 // Parse a simple ISS JSON payload, print the important fields and return a compact JSON string
