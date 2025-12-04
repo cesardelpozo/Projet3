@@ -2,19 +2,28 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <HTTPClient.h>
+#include <PubSubClient.h>
 
 // WiFi credentials
 const char* WIFI_SSID = "Papi Cesar";
 const char* WIFI_PASS = "Apple Time";
 
-//Headers
+// Thinger.io MQTT credentials
+const char* MQTT_SERVER = "maisonneuve.aws.thinger.io";
+const int MQTT_PORT = 1883;
+const char* MQTT_USER = "Cesar"; // Replace with your Thinger.io username
+const char* MQTT_PASS = "Projet3"; // Replace with your Thinger.io MQTT token
+
+// Headers
 void sendHttpRequest(const char* url);
 const char* httpReasonPhrase(int code);
 String parseAndPrintISS(const String& payload);
+void connectToMQTT();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
 
 WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
-// Attempt to connect to WiFi network; if it fails, wait 1 second and try again.
 void connectToWiFi() {
   Serial.print("Connecting to WiFi SSID: ");
   Serial.println(WIFI_SSID);
@@ -35,6 +44,35 @@ void connectToWiFi() {
   }
 }
 
+// Connect to MQTT broker (Thinger.io)
+void connectToMQTT() {
+  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+  
+  Serial.print("Connecting to MQTT broker: ");
+  Serial.println(MQTT_SERVER);
+
+  unsigned long start = millis();
+  while (!mqttClient.connected() && millis() - start < 10000) {
+    if (mqttClient.connect("ESP32Client", MQTT_USER, MQTT_PASS)) {
+      Serial.println("MQTT connected!");
+    } else {
+      Serial.print("MQTT connection failed, rc=");
+      Serial.println(mqttClient.state());
+      delay(500);
+    }
+  }
+
+  if (!mqttClient.connected()) {
+    Serial.println("Failed to connect to MQTT broker");
+  }
+}
+
+// MQTT callback function (called when message is received on subscribed topic)
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  // Not subscribing to any topics yet, but keeping this for future use
+}
+
 void setup() {
   // Start serial for debug output
   Serial.begin(115200);
@@ -42,9 +80,17 @@ void setup() {
   delay(100);
 
   connectToWiFi();
+  connectToMQTT();
 }
 
 void loop() {
+  // Reconnect MQTT if disconnected
+  if (!mqttClient.connected()) {
+    connectToMQTT();
+  }
+  
+  mqttClient.loop(); // Keep MQTT connection alive
+
   // Example: send an HTTP GET request every 2 seconds
   static unsigned long lastRequest = 0;
   const unsigned long interval = 2000; // 2s
@@ -175,7 +221,6 @@ String parseAndPrintISS(const String& payload) {
   }
 
   // latitude and longitude: either top-level or under iss_position
-  // latitude
   idx = lower.indexOf("\"latitude\"");
   if (idx != -1) {
     int colon = lower.indexOf(':', idx);
