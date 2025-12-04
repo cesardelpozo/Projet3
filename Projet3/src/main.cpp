@@ -60,6 +60,12 @@ void connectToMQTT() {
   while (!mqttClient.connected() && millis() - start < 15000) {
     if (mqttClient.connect(THINGER_DEVICE, THINGER_USER, THINGER_CREDENTIAL)) {
       Serial.println("MQTT connected!");
+
+      String subTopic = String(TOPIC);
+      mqttClient.subscribe(subTopic.c_str());
+      Serial.print("Subscribed to: ");
+      Serial.println(subTopic);
+
       break;
     } else {
       Serial.print("MQTT connection failed, rc=");
@@ -145,8 +151,10 @@ void sendHttpRequest(const char* url) {
     String payload = http.getString();
     // Parse ISS JSON and print nicely formatted output
     String issJson = parseAndPrintISS(payload);
-    
-    // Publish to MQTT topic with Thinger.io format
+    if (!mqttClient.connected()) {
+      connectToMQTT();
+    }
+    // Publish to MQTT topic
     if (mqttClient.connected()) {
       if (mqttClient.publish(TOPIC, payload.c_str())) {
         Serial.print("Published ISS data to MQTT topic: ");
