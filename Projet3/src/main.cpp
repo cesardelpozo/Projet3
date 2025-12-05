@@ -3,6 +3,8 @@
 #include <WiFiClient.h>
 #include <HTTPClient.h>
 #include <PubSubClient.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
 
 // WiFi credentials
 const char* WIFI_SSID = "IOT-6220";
@@ -16,11 +18,17 @@ const char* THINGER_DEVICE = "ESP32-C6-DevKit-M1";   // device id (used as MQTT 
 const char* THINGER_CREDENTIAL = "Projet3"; // device credential / password 
 const char* TOPIC = "coordonnees";
 
+// ESP-NOW configuration
+uint8_t receiverMacAddress[] = {0xCC, 0xBA, 0x97, 0x16, 0x2A, 0xF8};
+const int ESPNOW_CHANNEL = 6;
+
 // Headers
 String sendHttpRequest(const char* url);
 String parseAndPrintISS(const String& payload);
 bool connectToMQTT();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
+void initESPNow();
+void onDataSent(const esp_now_send_info_t *info, esp_now_send_status_t status);
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -28,6 +36,9 @@ PubSubClient mqttClient(espClient);
 void connectToWiFi() {
   Serial.print("Connecting to WiFi SSID: ");
   Serial.println(WIFI_SSID);
+
+  // Set WiFi to station mode
+  WiFi.mode(WIFI_STA);
 
   // Begin WiFi connection
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -42,6 +53,13 @@ void connectToWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("WiFi connected, IP: ");
     Serial.println(WiFi.localIP());
+    
+    // Verify the actual channel being used
+    uint8_t primaryChan;
+    wifi_second_chan_t secondChan;
+    esp_wifi_get_channel(&primaryChan, &secondChan);
+    Serial.print("Actual WiFi channel: ");
+    Serial.println(primaryChan);
   }
 }
 
@@ -75,11 +93,52 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   // Not subscribing to any topics yet, but keeping this for future use
 }
 
+// ESP-NOW callback when data is sent
+void onDataSent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
+  Serial.print("ESP-NOW Send Status: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Failed");
+}
+
+// Initialize ESP-NOW
+void initESPNow() {
+  // Get actual WiFi channel
+  uint8_t channel;
+  wifi_second_chan_t secondChan;
+  esp_wifi_get_channel(&channel, &secondChan);
+  
+  // Initialize ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+  Serial.println("ESP-NOW initialized");
+
+  // Register send callback
+  esp_now_register_send_cb(onDataSent);
+
+  // Add peer
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, receiverMacAddress, 6);
+  peerInfo.channel = channel;  // Use actual WiFi channel
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("Failed to add ESP-NOW peer");
+    return;
+  }
+  Serial.println("ESP-NOW peer added successfully");
+}
+
 void setup() {
   // Start serial for debug output
   Serial.begin(115200);
   // Small delay to allow Serial monitor to attach
   delay(100);
+
+  // Print MAC address
+  WiFi.mode(WIFI_STA);
+  Serial.print("ESP32 MAC Address: ");
+  Serial.println(WiFi.macAddress());
 
   // Configure MQTT client once
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
@@ -87,6 +146,7 @@ void setup() {
   mqttClient.setBufferSize(512);  // Increase buffer size for larger messages
 
   connectToWiFi();
+  initESPNow();  // Initialize ESP-NOW after WiFi
   connectToMQTT();
 }
 
@@ -111,6 +171,15 @@ void loop() {
   if (now - lastRequest >= interval) {
     lastRequest = now;
     
+    // Print current WiFi channel and MAC address
+    Serial.print("MAC Address: ");
+    Serial.println(WiFi.macAddress());
+    uint8_t primaryChan;
+    wifi_second_chan_t secondChan;
+    esp_wifi_get_channel(&primaryChan, &secondChan);
+    Serial.print("Current WiFi channel: ");
+    Serial.println(primaryChan);
+    
     String issJson = sendHttpRequest("http://api.open-notify.org/iss-now.json");
 
     // Publish to MQTT topic
@@ -130,6 +199,16 @@ void loop() {
       } else {
         Serial.print("Failed to publish to MQTT. State: ");
         Serial.println(mqttClient.state());
+      }
+      
+      // Send via ESP-NOW
+      if (issJson.length() > 0) {
+        esp_err_t result = esp_now_send(receiverMacAddress, (uint8_t*)issJson.c_str(), issJson.length());
+        if (result == ESP_OK) {
+          Serial.println("ESP-NOW data sent successfully");
+        } else {
+          Serial.println("Error sending ESP-NOW data");
+        }
       }
     } else {
       Serial.println("MQTT not connected, skipping publish");
