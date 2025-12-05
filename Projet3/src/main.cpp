@@ -17,9 +17,9 @@ const char* THINGER_CREDENTIAL = "Projet3"; // device credential / password
 const char* TOPIC = "coordonnees";
 
 // Headers
-void sendHttpRequest(const char* url);
+String sendHttpRequest(const char* url);
 String parseAndPrintISS(const String& payload);
-void connectToMQTT();
+bool connectToMQTT();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 
 WiFiClient espClient;
@@ -46,36 +46,27 @@ void connectToWiFi() {
 }
 
 // Connect to MQTT broker (Thinger.io)
-void connectToMQTT() {
+bool connectToMQTT() {
   // Only reconnect if WiFi is connected
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi not connected, cannot connect to MQTT");
-    return;
+    return false; // WiFi not connected
   }
-  
+
+  if(mqttClient.connected()) {
+    return true; // Already connected
+  }
+
   Serial.print("Connecting to MQTT broker: ");
   Serial.println(MQTT_SERVER);
 
-  unsigned long start = millis();
-  while (!mqttClient.connected() && millis() - start < 15000) {
-    if (mqttClient.connect(THINGER_DEVICE, THINGER_USER, THINGER_CREDENTIAL)) {
-      Serial.println("MQTT connected!");
-
-      String subTopic = String(TOPIC);
-      mqttClient.subscribe(subTopic.c_str());
-      Serial.print("Subscribed to: ");
-      Serial.println(subTopic);
-
-      break;
-    } else {
-      Serial.print("MQTT connection failed, rc=");
-      Serial.println(mqttClient.state());
-      delay(500);
-    }
-  }
-
-  if (!mqttClient.connected()) {
-    Serial.println("Failed to connect to MQTT broker");
+  if (mqttClient.connect(THINGER_DEVICE, THINGER_USER, THINGER_CREDENTIAL)) {
+    Serial.println("MQTT connected!");
+    return true; // Successfully connected
+  } else {
+    Serial.print("MQTT connection failed, rc=");
+    Serial.println(mqttClient.state());
+    return false; // Connection failed
   }
 }
 
@@ -93,6 +84,7 @@ void setup() {
   // Configure MQTT client once
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
+  mqttClient.setBufferSize(512);  // Increase buffer size for larger messages
 
   connectToWiFi();
   connectToMQTT();
@@ -101,9 +93,14 @@ void setup() {
 void loop() {
   // Reconnect MQTT if disconnected
   if (!mqttClient.connected()) {
-    connectToMQTT();
+    if(connectToMQTT()) {
+      Serial.println("Reconnected to MQTT broker");
+    } else {
+      Serial.println("Failed to reconnect to MQTT broker");
+      delay(200);
+      return; // Skip rest of loop if MQTT not connected
+    }
   }
-  
   mqttClient.loop(); // Keep MQTT connection alive
 
   // Example: send an HTTP GET request every 5 second
@@ -114,12 +111,34 @@ void loop() {
   if (now - lastRequest >= interval) {
     lastRequest = now;
     
-    sendHttpRequest("http://api.open-notify.org/iss-now.json");
+    String issJson = sendHttpRequest("http://api.open-notify.org/iss-now.json");
+
+    // Publish to MQTT topic
+    while (!mqttClient.connected()) {
+      Serial.println("MQTT disconnected, attempting to reconnect...");
+      connectToMQTT();
+      delay(200);
+    }
+    mqttClient.loop(); // Keep MQTT connection alive
+    if (mqttClient.connected() && issJson.length() > 0) {
+      Serial.print("Attempting to publish ");
+      Serial.print(issJson.length());
+      Serial.println(" bytes to MQTT...");
+      if (mqttClient.publish(TOPIC, issJson.c_str())) {
+        Serial.print("Published ISS data to MQTT topic: ");
+        Serial.println(TOPIC);
+      } else {
+        Serial.print("Failed to publish to MQTT. State: ");
+        Serial.println(mqttClient.state());
+      }
+    } else {
+      Serial.println("MQTT not connected, skipping publish");
+    }
   }
 }
 
 // Sends a simple HTTP GET request to the provided URL and prints the response
-void sendHttpRequest(const char* url) {
+String sendHttpRequest(const char* url) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi not connected, attempting to reconnect...");
     connectToWiFi();
@@ -149,28 +168,15 @@ void sendHttpRequest(const char* url) {
 
   if (httpCode >= 200 && httpCode <= 304) {
     String payload = http.getString();
+    http.end();
     // Parse ISS JSON and print nicely formatted output
-    String issJson = parseAndPrintISS(payload);
-    if (!mqttClient.connected()) {
-      connectToMQTT();
-    }
-    // Publish to MQTT topic
-    if (mqttClient.connected()) {
-      if (mqttClient.publish(TOPIC, payload.c_str())) {
-        Serial.print("Published ISS data to MQTT topic: ");
-        Serial.println(TOPIC);
-      } else {
-        Serial.println("Failed to publish to MQTT");
-      }
-    } else {
-      Serial.println("MQTT not connected, skipping publish");
-    }
+    return parseAndPrintISS(payload);
   } else {
     Serial.print("HTTP request failed, error: ");
     Serial.println(http.errorToString(httpCode));
+    http.end();
+    return "{}"; // Return empty JSON on failure
   }
-
-  http.end();
 }
 
 // Parse a simple ISS JSON payload, print the important fields and return a compact JSON string
